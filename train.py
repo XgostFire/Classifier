@@ -1,42 +1,61 @@
+import argparse
+import os
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
-import os
-import numpy as np
 
-# Données
-X_train = np.load(os.path.join(os.environ['EI_DATA_DIRECTORY'], 'X_train.npy'))
-Y_train = np.load(os.path.join(os.environ['EI_DATA_DIRECTORY'], 'Y_train.npy'))
-X_test = np.load(os.path.join(os.environ['EI_DATA_DIRECTORY'], 'X_test.npy'))
-Y_test = np.load(os.path.join(os.environ['EI_DATA_DIRECTORY'], 'Y_test.npy'))
+# Arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('--learning_rate', type=float, default=0.001)
+parser.add_argument('--epochs', type=int, default=20)
+parser.add_argument('--optimizer', type=str, default='adam')
+args = parser.parse_args()
 
-# Normalisation
-X_train = X_train.astype('float32') / 255.0
-X_test = X_test.astype('float32') / 255.0
+# Chargement des données Edge Impulse
+X_train = np.load('X_split_train.npy')
+Y_train = np.load('Y_split_train.npy')
+X_test = np.load('X_split_test.npy')
+Y_test = np.load('Y_split_test.npy')
 
-# Récupérer le nombre de classes
-num_classes = Y_train.shape[1]
+num_classes = len(np.unique(Y_train))
+input_shape = X_train.shape[1:]  # Exemple: (96,96,1)
 
-# Modèle très léger
+# Préparation des labels
+Y_train = tf.keras.utils.to_categorical(Y_train, num_classes)
+Y_test = tf.keras.utils.to_categorical(Y_test, num_classes)
+
+# Modèle simplifié
 model = Sequential([
-    Conv2D(8, (3,3), activation='relu', input_shape=(96, 96, 1)),
-    MaxPooling2D(2,2),
-    Conv2D(16, (3,3), activation='relu'),
-    MaxPooling2D(2,2),
+    Conv2D(4, (3, 3), activation='relu', input_shape=input_shape),
+    MaxPooling2D(2, 2),
+    Conv2D(8, (3, 3), activation='relu'),
+    MaxPooling2D(2, 2),
     Flatten(),
-    Dense(32, activation='relu'),
+    Dense(16, activation='relu'),
     Dense(num_classes, activation='softmax')
 ])
 
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+# Optimiseur
+if args.optimizer == 'adam':
+    optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate)
+elif args.optimizer == 'sgd':
+    optimizer = tf.keras.optimizers.SGD(learning_rate=args.learning_rate)
+else:
+    raise ValueError("Unsupported optimizer")
+
+model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
 
 # Entraînement
-model.fit(X_train, Y_train, epochs=20, batch_size=32, validation_data=(X_test, Y_test))
+model.fit(X_train, Y_train, epochs=args.epochs, batch_size=32, validation_data=(X_test, Y_test))
 
-# Exportation du modèle TFLite
+# Sauvegarde au format Keras
 model.save('model.h5')
+
+# Conversion TFLite quantifiée
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
-tflite_model = converter.convert()
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_quant_model = converter.convert()
 
 with open('model.tflite', 'wb') as f:
-    f.write(tflite_model)
+    f.write(tflite_quant_model)
